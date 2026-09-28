@@ -4,7 +4,7 @@
 #  Escuela de Fútbol La Esmeralda (Maracay, Venezuela)
 #
 #  Para: Ubuntu 22.04 / 24.04 (VPS limpio)
-#  Instala: Apache + PHP + MariaDB + la aplicación + firewall + respaldos diarios
+#  Instala: Nginx + PHP-FPM + MariaDB + la aplicación + firewall + respaldos diarios
 #
 #  INSTALAR:
 #      sudo apt update && sudo apt install -y git
@@ -16,6 +16,9 @@
 #
 #  Respaldo automático diario: /var/backups/esmeralda
 #  Credenciales generadas:     /root/esmeralda_credenciales.txt
+#  Errores de la aplicación:   /var/log/nginx/esmeralda_error.log
+#
+#  Con dominio propio (opcional):  sudo DOMINIO=esmeralda.midominio.com bash instalar_vps.sh
 #
 #  Olvidó la clave de admin:        sudo bash instalar_vps.sh --reset-admin
 #  Base de datos DESDE CERO (¡borra los datos!):
@@ -66,13 +69,29 @@ fi
 echo "Fuente: $FUENTE"
 
 # ---------- 1. Paquetes ----------
-verde "Instalando Apache, PHP y MariaDB (puede tardar unos minutos)"
+verde "Instalando Nginx, PHP-FPM y MariaDB (puede tardar unos minutos)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq apache2 mariadb-server php libapache2-mod-php php-mysql php-mbstring \
+# Ojo: NO instalar el paquete "php" a secas; en Ubuntu arrastra libapache2-mod-php y Apache.
+apt-get install -y -qq nginx mariadb-server php-fpm php-cli php-mysql php-mbstring \
     php-xml php-curl php-zip unzip rsync ufw cron >/dev/null
+
+# Si el servidor tenía Apache (instalación anterior), se apaga para liberar el puerto 80
+if command -v apache2 >/dev/null 2>&1 || [[ -d /etc/apache2 ]]; then
+    aviso "Se encontró Apache: se detiene y deshabilita para que Nginx use el puerto 80."
+    servicio stop apache2; servicio disable apache2
+fi
+
+# Versión de PHP-FPM instalada (la más reciente que tenga carpeta fpm)
+PHP_VER=""
+for v in $(ls /etc/php 2>/dev/null | sort -V); do
+    if [[ -d "/etc/php/$v/fpm" ]]; then PHP_VER="$v"; fi
+done
+[[ -n "$PHP_VER" ]] || fallo "No se encontró PHP-FPM instalado."
+echo "PHP-FPM $PHP_VER"
 servicio enable mariadb; servicio start mariadb
-servicio enable apache2
+servicio enable "php${PHP_VER}-fpm"
+servicio enable nginx
 
 # ---------- 2. Base de datos ----------
 verde "Configurando la base de datos"
@@ -140,31 +159,50 @@ find "$APP_DIR" -type f -exec chmod 640 {} \;
 chown -R www-data:www-data "$APP_DIR/uploads"
 chmod 770 "$APP_DIR/uploads" "$APP_DIR/uploads/fotos"
 
-# ---------- 4. Apache y PHP ----------
-verde "Configurando Apache"
-cat > /etc/apache2/sites-available/esmeralda.conf <<EOF
-<VirtualHost *:80>
-    ServerName localhost
-    DocumentRoot $APP_DIR
-    <Directory $APP_DIR>
-        Options -Indexes +FollowSymLinks
-        AllowOverride All
-        Require all granted
-    </Directory>
-    Header always set X-Content-Type-Options "nosniff"
-    Header always set X-Frame-Options "SAMEORIGIN"
-    Header always set Referrer-Policy "same-origin"
-    ErrorLog \${APACHE_LOG_DIR}/esmeralda_error.log
-    CustomLog \${APACHE_LOG_DIR}/esmeralda_access.log combined
-</VirtualHost>
-EOF
-a2enmod -q headers >/dev/null
-a2dissite -q 000-default >/dev/null 2>&1 || true
-a2ensite -q esmeralda >/dev/null
-sed -i 's/^ServerTokens .*/ServerTokens Prod/; s/^ServerSignature .*/ServerSignature Off/' /etc/apache2/conf-available/security.conf || true
+# ---------- 4. Nginx y PHP-FPM ----------
+verde "Configurando Nginx"
+DOMINIO="${DOMINIO:-_}"     # "_" = responde por la IP del servidor
+# Escuchar también por IPv6 sólo si el servidor lo tiene (algunos VPS no)
+LISTEN6=""
+[[ -f /proc/net/if_inet6 ]] && LISTEN6="listen [::]:80 default_server;"
+cat > /etc/nginx/sites-available/esmeralda <<EOF
+server {
+    listen 80 default_server;
+    $LISTEN6
+    server_name $DOMINIO;
+    root $APP_DIR;
+    index index.php;
 
-for CONF_D in /etc/php/*/apache2/conf.d; do
-cat > "$CONF_D/99-esmeralda.ini" <<'EOF'
+    client_max_body_size 8M;          # nginx acepta 1 MB por defecto; las fotos pueden pesar 2 MB
+    server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "same-origin" always;
+
+    access_log /var/log/nginx/esmeralda_access.log;
+    error_log  /var/log/nginx/esmeralda_error.log;
+
+    # Equivalente a los .htaccess (nginx no los lee)
+    location ^~ /.well-known/acme-challenge/ { allow all; }       # para un futuro certificado HTTPS
+    location ~ /\.                                 { deny all; }  # .git, .htaccess, .gitignore...
+    location ~ ^/(config|database|includes)/       { deny all; }
+    location ~* ^/uploads/.*\.(php|phtml|phar|pl|py|cgi|sh)\$ { deny all; }
+    location ~* \.(sh|sql|md)\$                    { deny all; }
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php${PHP_VER}-fpm.sock;
+    }
+}
+EOF
+rm -f /etc/nginx/sites-enabled/default
+ln -sf /etc/nginx/sites-available/esmeralda /etc/nginx/sites-enabled/esmeralda
+
+cat > "/etc/php/${PHP_VER}/fpm/conf.d/99-esmeralda.ini" <<'EOF'
 expose_php = Off
 display_errors = Off
 log_errors = On
@@ -174,15 +212,16 @@ date.timezone = America/Caracas
 session.cookie_httponly = 1
 session.use_strict_mode = 1
 EOF
-done
-apache2ctl configtest >/dev/null 2>&1 || fallo "Error en la configuración de Apache (ejecute: apache2ctl configtest)"
-servicio restart apache2
+
+nginx -t >/dev/null 2>&1 || fallo "Error en la configuración de Nginx (ejecute: nginx -t)"
+servicio restart "php${PHP_VER}-fpm"
+servicio restart nginx
 
 # ---------- 5. Firewall ----------
 verde "Configurando el firewall (SSH y web)"
 if command -v ufw >/dev/null; then
     ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
-    ufw allow 'Apache' >/dev/null 2>&1 || ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 'Nginx HTTP' >/dev/null 2>&1 || ufw allow 80/tcp >/dev/null 2>&1 || true
     ufw --force enable >/dev/null 2>&1 || aviso "No se pudo activar ufw (puede que el proveedor use su propio firewall)."
 fi
 
