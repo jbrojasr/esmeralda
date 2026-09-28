@@ -6,15 +6,16 @@
 #  Para: Ubuntu 22.04 / 24.04 (VPS limpio)
 #  Instala: Apache + PHP + MariaDB + la aplicación + firewall + respaldos diarios
 #
-#  USO con git (recomendado):
-#      git clone <URL-del-repositorio> esmeralda
+#  INSTALAR:
+#      sudo apt update && sudo apt install -y git
+#      git clone https://github.com/jbrojasr/esmeralda.git
 #      cd esmeralda && sudo bash instalar_vps.sh
 #
-#  USO con zip: suba esmeralda.zip y este script a la misma carpeta y ejecute
-#      sudo bash instalar_vps.sh
+#  ACTUALIZAR (conserva jugadores, usuarios y fotos):
+#      cd esmeralda && git pull && sudo bash instalar_vps.sh
 #
-#  Actualizar: git pull && sudo bash instalar_vps.sh   (o scripts/actualizar.sh)
-#  Los jugadores, usuarios y fotos se conservan.
+#  Respaldo automático diario: /var/backups/esmeralda
+#  Credenciales generadas:     /root/esmeralda_credenciales.txt
 #
 #  Olvidó la clave de admin:        sudo bash instalar_vps.sh --reset-admin
 #  Base de datos DESDE CERO (¡borra los datos!):
