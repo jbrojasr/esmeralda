@@ -4,7 +4,7 @@
 #  Escuela de Fútbol La Esmeralda (Maracay, Venezuela)
 #
 #  Para: Ubuntu 22.04 / 24.04 (VPS limpio)
-#  Instala: Nginx + PHP-FPM + MariaDB + la aplicación + firewall + respaldos diarios
+#  Instala: Nginx + PHP-FPM + MySQL + la aplicación + firewall + respaldos diarios
 #
 #  INSTALAR:
 #      sudo apt update && sudo apt install -y git
@@ -69,11 +69,38 @@ fi
 echo "Fuente: $FUENTE"
 
 # ---------- 1. Paquetes ----------
-verde "Instalando Nginx, PHP-FPM y MariaDB (puede tardar unos minutos)"
 export DEBIAN_FRONTEND=noninteractive
+
+# Si una instalación anterior usó MariaDB, se respaldan los datos y se reemplaza por MySQL
+# (no pueden convivir: ambos usan el puerto 3306 y la carpeta /var/lib/mysql).
+DUMP_MIGRACION=""
+if dpkg-query -W -f='${Status}' mariadb-server 2>/dev/null | grep -q "install ok installed"; then
+    verde "Migrando de MariaDB a MySQL (se conservan los datos)"
+    mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+    servicio start mariadb
+    if mysql -N -e "SHOW DATABASES LIKE '$DB_NAME'" 2>/dev/null | grep -qx "$DB_NAME"; then
+        DUMP_MIGRACION="$BACKUP_DIR/migracion_mariadb_$(date +%Y%m%d_%H%M%S).sql"
+        mysqldump --single-transaction --default-character-set=utf8mb4 --routines "$DB_NAME" > "$DUMP_MIGRACION" \
+            || fallo "No se pudo respaldar la base de datos de MariaDB. No se cambió nada."
+        sed -i '/^\/\*M!/d' "$DUMP_MIGRACION"      # quita marcas propias de MariaDB que MySQL no entiende
+        echo "Respaldo de la migración: $DUMP_MIGRACION"
+    fi
+    servicio stop mariadb
+    for i in $(seq 1 20); do pgrep -x mariadbd >/dev/null || pgrep -x mysqld >/dev/null || break; sleep 1; done
+    pkill -x mariadbd 2>/dev/null || true; pkill -x mysqld_safe 2>/dev/null || true; sleep 2
+    apt-get purge -y -qq mariadb-server mariadb-client mariadb-common >/dev/null 2>&1 || true
+    apt-get purge -y -qq 'mariadb-*' >/dev/null 2>&1 || true
+    apt-get autoremove -y -qq >/dev/null 2>&1 || true
+    SELLO=$(date +%Y%m%d_%H%M%S)
+    [[ -d /var/lib/mysql ]] && mv /var/lib/mysql "/var/lib/mysql.mariadb.$SELLO"
+    [[ -d /etc/mysql ]] && mv /etc/mysql "/etc/mysql.mariadb.$SELLO"
+    echo "Datos antiguos de MariaDB guardados en /var/lib/mysql.mariadb.$SELLO"
+fi
+
+verde "Instalando Nginx, PHP-FPM y MySQL (puede tardar unos minutos)"
 apt-get update -qq
 # Ojo: NO instalar el paquete "php" a secas; en Ubuntu arrastra libapache2-mod-php y Apache.
-apt-get install -y -qq nginx mariadb-server php-fpm php-cli php-mysql php-mbstring \
+apt-get install -y -qq nginx mysql-server php-fpm php-cli php-mysql php-mbstring \
     php-xml php-curl php-zip unzip rsync ufw cron >/dev/null
 
 # Si el servidor tenía Apache (instalación anterior), se apaga para liberar el puerto 80
@@ -89,15 +116,18 @@ for v in $(ls /etc/php 2>/dev/null | sort -V); do
 done
 [[ -n "$PHP_VER" ]] || fallo "No se encontró PHP-FPM instalado."
 echo "PHP-FPM $PHP_VER"
-servicio enable mariadb; servicio start mariadb
+servicio enable mysql; servicio start mysql
+for i in $(seq 1 30); do mysqladmin ping >/dev/null 2>&1 && break; sleep 1; done
+mysqladmin ping >/dev/null 2>&1 || fallo "MySQL no arrancó (revise: journalctl -u mysql)"
+# PHP-FPM (usuario www-data) necesita poder entrar a la carpeta del socket de MySQL
+[[ -d /run/mysqld ]] && chmod 755 /run/mysqld
 servicio enable "php${PHP_VER}-fpm"
 servicio enable nginx
 
 # ---------- 2. Base de datos ----------
 verde "Configurando la base de datos"
-# Endurecer MariaDB: quitar usuarios anónimos y base de pruebas
-mysql -e "DELETE FROM mysql.global_priv WHERE User='';" 2>/dev/null || mysql -e "DELETE FROM mysql.user WHERE User='';" || true
-mysql -e "DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;"
+# Endurecer MySQL: quitar usuarios anónimos y base de pruebas (si existieran)
+mysql -e "DROP USER IF EXISTS ''@'localhost'; DROP USER IF EXISTS ''@'$(hostname)'; DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;"
 
 # Reutilizar la clave si ya se instaló antes
 if [[ -f "$CRED_FILE" ]] && grep -q '^DB_PASS=' "$CRED_FILE"; then
@@ -110,7 +140,12 @@ mysql -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PA
 
 TABLAS=$(mysql -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB_NAME';")
 ADMIN_PASS=""
-if [[ "$TABLAS" -eq 0 || $REINSTALAR_BD -eq 1 ]]; then
+if [[ "$TABLAS" -eq 0 && -n "$DUMP_MIGRACION" && $REINSTALAR_BD -eq 0 ]]; then
+    mysql -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    mysql --default-character-set=utf8mb4 "$DB_NAME" < "$DUMP_MIGRACION" || fallo "No se pudo importar el respaldo $DUMP_MIGRACION en MySQL."
+    aviso "Datos migrados desde MariaDB: jugadores, usuarios y claves se conservan."
+    NUEVO_HASH=0
+elif [[ "$TABLAS" -eq 0 || $REINSTALAR_BD -eq 1 ]]; then
     [[ $REINSTALAR_BD -eq 1 && "$TABLAS" -gt 0 ]] && aviso "Reinstalando la base de datos: se borran los datos anteriores."
     mysql --default-character-set=utf8mb4 < "$FUENTE/database/esmeralda.sql"
     NUEVO_HASH=1
