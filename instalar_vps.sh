@@ -139,10 +139,10 @@ rsync_disponible=$(command -v rsync || true)
 if [[ -n "$rsync_disponible" ]]; then
     rsync -a --delete --exclude 'uploads/fotos/*' --exclude 'config/config.php' \
           --exclude 'instalar_vps.sh' --exclude 'README.md' \
-          --exclude '.git' --exclude '.gitignore' --exclude '.gitattributes' --exclude 'scripts' \
+          --exclude '.git' --exclude '.gitignore' --exclude '.gitattributes' --exclude 'scripts' --exclude '.vscode' \
           "$FUENTE/" "$APP_DIR/"
 else
-    ( cd "$FUENTE" && tar --exclude='./uploads/fotos/*' --exclude='./config/config.php' --exclude='./instalar_vps.sh' --exclude='./README.md' --exclude='./.git' --exclude='./.gitignore' --exclude='./.gitattributes' --exclude='./scripts' -cf - . ) | ( cd "$APP_DIR" && tar -xf - )
+    ( cd "$FUENTE" && tar --exclude='./uploads/fotos/*' --exclude='./config/config.php' --exclude='./instalar_vps.sh' --exclude='./README.md' --exclude='./.git' --exclude='./.gitignore' --exclude='./.gitattributes' --exclude='./scripts' --exclude='./.vscode' -cf - . ) | ( cd "$APP_DIR" && tar -xf - )
 fi
 mkdir -p "$APP_DIR/uploads/fotos"
 
