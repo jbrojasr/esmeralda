@@ -17,7 +17,9 @@ function db(): PDO
 {
     static $pdo = null;
     if ($pdo === null) {
-        $dsn = 'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';dbname=' . DB_NAME . ';charset=utf8mb4';
+        $dsn = DB_SOCKET !== ''
+            ? 'mysql:unix_socket=' . DB_SOCKET . ';dbname=' . DB_NAME . ';charset=utf8mb4'
+            : 'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';dbname=' . DB_NAME . ';charset=utf8mb4';
         try {
             $pdo = new PDO($dsn, DB_USER, DB_PASS, [
                 PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -27,7 +29,7 @@ function db(): PDO
         } catch (PDOException $ex) {
             http_response_code(500);
             exit('<h2>No se pudo conectar a la base de datos.</h2><p>Verifique que MySQL esté encendido y '
-                . 'los datos de config/config.php.</p>');
+                . 'los datos de config/config.php (o config/config.local.php).</p>');
         }
     }
     return $pdo;

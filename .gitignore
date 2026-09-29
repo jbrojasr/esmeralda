@@ -11,3 +11,6 @@ uploads/fotos/*
 Thumbs.db
 .vscode/
 .idea/
+
+# Configuración local de cada equipo (MAMP/XAMPP)
+config/config.local.php

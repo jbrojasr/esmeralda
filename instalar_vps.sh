@@ -172,12 +172,12 @@ mkdir -p "$APP_DIR"
 # Conservar fotos subidas si es una actualización
 rsync_disponible=$(command -v rsync || true)
 if [[ -n "$rsync_disponible" ]]; then
-    rsync -a --delete --exclude 'uploads/fotos/*' --exclude 'config/config.php' \
+    rsync -a --delete --exclude 'uploads/fotos/*' --exclude 'config/config.php' --exclude 'config/config.local.php' \
           --exclude 'instalar_vps.sh' --exclude 'README.md' \
           --exclude '.git' --exclude '.gitignore' --exclude '.gitattributes' --exclude 'scripts' --exclude '.vscode' \
           "$FUENTE/" "$APP_DIR/"
 else
-    ( cd "$FUENTE" && tar --exclude='./uploads/fotos/*' --exclude='./config/config.php' --exclude='./instalar_vps.sh' --exclude='./README.md' --exclude='./.git' --exclude='./.gitignore' --exclude='./.gitattributes' --exclude='./scripts' --exclude='./.vscode' -cf - . ) | ( cd "$APP_DIR" && tar -xf - )
+    ( cd "$FUENTE" && tar --exclude='./uploads/fotos/*' --exclude='./config/config.php' --exclude='./config/config.local.php' --exclude='./instalar_vps.sh' --exclude='./README.md' --exclude='./.git' --exclude='./.gitignore' --exclude='./.gitattributes' --exclude='./scripts' --exclude='./.vscode' -cf - . ) | ( cd "$APP_DIR" && tar -xf - )
 fi
 mkdir -p "$APP_DIR/uploads/fotos"
 
